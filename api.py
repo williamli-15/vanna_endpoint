@@ -1,8 +1,9 @@
 import os
+import sqlite3
+import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
-import pandas as pd
+from typing import List, Optional
 from dotenv import load_dotenv
 
 from vanna.openai import OpenAI_Chat
@@ -11,30 +12,50 @@ from vanna.chromadb import ChromaDB_VectorStore
 load_dotenv()
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY not found in environment variables. Please add it to your .env file.")
+    raise ValueError("OPENAI_API_KEY not found in environment variables.")
 
-# --- DEPLOYMENT-READY PATH CONFIGURATION ---
 DATA_DIR = os.environ.get('DATA_DIR', '.')
-CHROMA_PATH = os.path.join(DATA_DIR, 'chroma') 
+CHROMA_PATH = os.path.join(DATA_DIR, 'chroma')
 DB_PATH = os.path.join(DATA_DIR, 'yc_companies.db')
 
 print(f"Using data directory: {DATA_DIR}")
 print(f"ChromaDB path: {CHROMA_PATH}")
 print(f"SQLite DB path: {DB_PATH}")
-# --- END DEPLOYMENT CONFIGURATION ---
 
 class MyVanna(ChromaDB_VectorStore, OpenAI_Chat):
     def __init__(self, config=None):
-        # Pass the CHROMA_PATH to the vector store initializer
         ChromaDB_VectorStore.__init__(self, config={'path': CHROMA_PATH})
         OpenAI_Chat.__init__(self, config=config)
 
 vn = MyVanna(config={'api_key': OPENAI_API_KEY, 'model': 'gpt-4o'})
 
-# Connect to our SQLite database using the configured path
-vn.connect_to_sqlite(DB_PATH)
+
+# ### MODIFIED BLOCK START ###
+# Instead of using vn.connect_to_sqlite(), we will set the vn.run_sql method directly.
+# This is a more robust way to connect to a local database file and avoids the URL error.
+def run_sql_from_local_db(sql: str) -> pd.DataFrame:
+    """
+    Connects to the local SQLite DB and executes a query.
+    """
+    if not os.path.exists(DB_PATH):
+        raise FileNotFoundError(f"Database file not found at {DB_PATH}. Please run create_database.py.")
+        
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        df = pd.read_sql_query(sql, conn)
+    finally:
+        conn.close()
+    return df
+
+# Set the custom function for Vanna to use
+vn.run_sql = run_sql_from_local_db
+vn.run_sql_is_set = True
+print(f"Vanna is configured to run SQL on local database: {DB_PATH}")
+# ### MODIFIED BLOCK END ###
+
 
 app = FastAPI(title="YC Companies Query API")
+
 
 class QueryRequest(BaseModel):
     question: str
