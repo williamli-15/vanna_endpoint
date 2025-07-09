@@ -3,6 +3,11 @@ import sqlite3
 import os
 
 def create_and_populate_db(db_path, yc_companies_json_path, linkedin_json_path):
+    """
+    Creates and populates a SQLite database from YC company and LinkedIn JSON data.
+    This function is idempotent: it will delete the old database file if it exists
+    and create a new one from the provided JSON files.
+    """
     if os.path.exists(db_path):
         os.remove(db_path)
         print(f"Removed existing database file: {db_path}")
@@ -12,11 +17,11 @@ def create_and_populate_db(db_path, yc_companies_json_path, linkedin_json_path):
     print(f"Created new SQLite database: {db_path}")
 
     try:
-        with open(yc_companies_json, 'r', encoding='utf-8') as f:
+        with open(yc_companies_json_path, 'r', encoding='utf-8') as f:
             companies_data = json.load(f)
             if isinstance(companies_data, dict) and 'data' in companies_data:
                 companies_data = companies_data['data']
-        with open(linkedin_json, 'r', encoding='utf-8') as f:
+        with open(linkedin_json_path, 'r', encoding='utf-8') as f:
             linkedin_data = json.load(f)
     except Exception as e:
         print(f"Error loading JSON files: {e}")
