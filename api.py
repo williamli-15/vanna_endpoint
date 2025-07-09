@@ -80,47 +80,60 @@ async def query(request: QueryRequest):
 
 @app.post("/train")
 async def train_model():
-    # 1. Train on DDL
+    """
+    This is the most critical function. It creates a robust "training package" for Vanna
+    by combining schema information (DDL), documentation about synonyms and relationships,
+    and a wide variety of question-SQL examples to handle user shorthand.
+    """
+    # 1. Train on DDL - The structural blueprint
     df_ddl = vn.run_sql("SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'")
     for ddl in df_ddl['sql'].to_list():
         vn.train(ddl=ddl)
+        print(f"Trained on DDL: {ddl.split('(')[0]}...")
 
-    # 2. Train on Documentation for relationship and synonym mapping
+    # 2. Train on Documentation - The "How-To" and "Dictionary"
     vn.train(documentation="""
-    - The user wants a list of companies. Your query should ALWAYS return a single column of unique company IDs named 'id'. ALWAYS use SELECT DISTINCT c.id.
-    - `companies.id` links to `company_founders.company_id` to find a company's founders.
-    - `founders.profileId` links to `company_founders.founder_id` and is the key for all founder-related tables.
-    
-    - SYNONYMS:
-    - 'MIT' refers to 'Massachusetts Institute of Technology'. Use `fe.school LIKE '%Massachusetts Institute of Technology%'`.
-    - 'Berkeley' or 'UC Berkeley' refers to 'University of California, Berkeley'. Use `fe.school LIKE '%Berkeley%'`.
-    - 'Stanford' refers to 'Stanford University'.
-    - 'FAANG' refers to the companies 'Meta', 'Apple', 'Amazon', 'Netflix', and 'Google'. Use `fe.company_name IN ('Meta', 'Apple', 'Amazon', 'Netflix', 'Google')`.
-    - 'Engineer' can mean 'Software Engineer', 'SDE', 'Backend Engineer', etc. Use `fe.title LIKE '%Engineer%'`.
-    - 'Fintech' refers to the 'Fintech' industry. Use `ci.industry = 'Fintech'`.
-    - 'AI' refers to the 'Artificial Intelligence' industry. Use `ci.industry = 'Artificial Intelligence'`.
+    - The user wants a list of companies. Your query should ALWAYS return a single column of unique company IDs. ALWAYS use SELECT DISTINCT c.id.
+    - To connect companies to founders, JOIN `companies` on `company_founders` using `c.id = cf.company_id`.
+    - To get founder details, JOIN `company_founders` on `founders` using `cf.founder_id = f.profileId`.
+    - To get founder experience, JOIN `founders` on `founder_experience` using `f.profileId = fe.founder_id`.
+    - To get founder education, JOIN `founders` on `founder_education` using `f.profileId = fe.founder_id`.
+    - To get founder skills, JOIN `founders` on `founder_skills` using `f.profileId = fs.founder_id`.
+    - To filter by industry or tag, JOIN `companies` on `company_industries` or `company_tags` respectively.
+    - An 'engineer' title implies a fuzzy search. Use `founder_experience.title LIKE '%Engineer%'`.
+    - For school names like 'MIT' or 'Berkeley', use a fuzzy search like `founder_education.school LIKE '%...%'`.
+    - 'FAANG' refers to the companies 'Meta', 'Apple', 'Amazon', 'Netflix', and 'Google'. Use an IN clause on `founder_experience.company_name`.
     """)
+    print("Trained on relationship and synonym documentation.")
 
-    # 3. Train on High-Quality Question/SQL Pairs
-    # These examples teach Vanna how to handle shorthand and complex joins.
+    # 3. Train on High-Quality Question/SQL Pairs - The "Worked Examples"
+    # This section is crucial for handling user shorthand. All JOINs are now corrected.
     example_queries = [
-        # Handling shorthand for schools
-        {"question": "MIT", "sql": "SELECT DISTINCT c.id FROM companies AS c JOIN company_founders AS cf ON c.id = cf.company_id JOIN founder_education AS fe ON cf.founder_id = fe.profileId WHERE fe.school LIKE '%Massachusetts Institute of Technology%';"},
+        # Company attribute queries
+        {"question": "San Francisco", "sql": "SELECT id FROM companies WHERE city = 'San Francisco';"},
+        {"question": "fintech companies", "sql": "SELECT c.id FROM companies AS c JOIN company_industries AS ci ON c.id = ci.company_id WHERE ci.industry = 'Fintech';"},
+        {"question": "AI", "sql": "SELECT c.id FROM companies AS c JOIN company_industries AS ci ON c.id = ci.company_id WHERE ci.industry = 'Artificial Intelligence';"},
+        {"question": "companies with more than 50 employees", "sql": "SELECT id FROM companies WHERE team_size > 50;"},
         
-        # Handling shorthand for work experience
-        {"question": "founder worked at Google", "sql": "SELECT DISTINCT c.id FROM companies AS c JOIN company_founders AS cf ON c.id = cf.company_id JOIN founder_experience AS fe ON cf.founder_id = fe.profileId WHERE fe.company_name = 'Google';"},
+        # Founder attribute queries (education) - CORRECTED JOIN
+        {"question": "MIT", "sql": "SELECT DISTINCT c.id FROM companies AS c JOIN company_founders AS cf ON c.id = cf.company_id JOIN founder_education AS fe ON cf.founder_id = fe.founder_id WHERE fe.school LIKE '%Massachusetts Institute of Technology%';"},
+        {"question": "Berkeley founders", "sql": "SELECT DISTINCT c.id FROM companies AS c JOIN company_founders AS cf ON c.id = cf.company_id JOIN founder_education AS fe ON cf.founder_id = fe.founder_id WHERE fe.school LIKE '%Berkeley%';"},
         
-        # Handling shorthand for industry
-        {"question": "fintech", "sql": "SELECT DISTINCT c.id FROM companies AS c JOIN company_industries AS ci ON c.id = ci.company_id WHERE ci.industry = 'Fintech';"},
-
-        # Handling complex query with multiple conditions
-        {"question": "Fintech companies with founders from FAANG", "sql": "SELECT DISTINCT c.id FROM companies AS c JOIN company_industries AS ci ON c.id = ci.company_id JOIN company_founders AS cf ON c.id = cf.company_id JOIN founder_experience AS fe ON cf.founder_id = fe.profileId WHERE ci.industry = 'Fintech' AND fe.company_name IN ('Meta', 'Apple', 'Amazon', 'Netflix', 'Google');"},
-
-        # Handling simple filtering
-        {"question": "companies in San Francisco", "sql": "SELECT id FROM companies WHERE city = 'San Francisco';"},
+        # Founder attribute queries (experience) - CORRECTED JOIN
+        {"question": "ex-Google founders", "sql": "SELECT DISTINCT c.id FROM companies AS c JOIN company_founders AS cf ON c.id = cf.company_id JOIN founder_experience AS fe ON cf.founder_id = fe.founder_id WHERE fe.company_name = 'Google';"},
+        {"question": "founders who worked at FAANG", "sql": "SELECT DISTINCT c.id FROM companies AS c JOIN company_founders AS cf ON c.id = cf.company_id JOIN founder_experience AS fe ON cf.founder_id = fe.founder_id WHERE fe.company_name IN ('Meta', 'Apple', 'Amazon', 'Netflix', 'Google');"},
+        
+        # Founder attribute queries (skills) - CORRECTED JOIN
+        {"question": "founders with Python skills", "sql": "SELECT DISTINCT c.id FROM companies AS c JOIN company_founders AS cf ON c.id = cf.company_id JOIN founder_skills AS fs ON cf.founder_id = fs.founder_id WHERE fs.skill = 'Python';"},
+        
+        # Complex, combined queries - CORRECTED JOIN
+        {"question": "AI companies with founders from Stanford", "sql": "SELECT DISTINCT c.id FROM companies AS c JOIN company_industries AS ci ON c.id = ci.company_id JOIN company_founders AS cf ON c.id = cf.company_id JOIN founder_education AS fe ON cf.founder_id = fe.founder_id WHERE ci.industry = 'Artificial Intelligence' AND fe.school LIKE '%Stanford University%';"},
+        {"question": "B2B companies where a founder was an engineer at a FAANG company", "sql": "SELECT DISTINCT c.id FROM companies AS c JOIN company_industries AS ci ON c.id = ci.company_id JOIN company_founders AS cf ON c.id = cf.company_id JOIN founder_experience AS fe ON cf.founder_id = fe.founder_id WHERE ci.industry = 'B2B' AND fe.company_name IN ('Meta', 'Apple', 'Amazon', 'Netflix', 'Google') AND fe.title LIKE '%Engineer%';"},
     ]
     for example in example_queries:
         vn.train(question=example["question"], sql=example["sql"])
+    
+    print(f"Trained on {len(example_queries)} example queries.")
     
     return {"status": "success", "message": "Model re-trained successfully with robust examples."}
 
