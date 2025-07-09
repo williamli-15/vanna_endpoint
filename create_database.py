@@ -2,7 +2,7 @@ import json
 import sqlite3
 import os
 
-def create_and_populate_db(db_path='yc_companies.db', yc_companies_json='yc_json', linkedin_json='linkedin-data.json'):
+def create_and_populate_db(db_path, yc_companies_json_path, linkedin_json_path):
     if os.path.exists(db_path):
         os.remove(db_path)
         print(f"Removed existing database file: {db_path}")
@@ -118,17 +118,30 @@ def create_and_populate_db(db_path='yc_companies.db', yc_companies_json='yc_json
 
 
 if __name__ == '__main__':
-    # This part remains correct
-    nextjs_data_path = '/Users/hengxuli/code/yc-x25-market-map-c/public/data'
-    vanna_endpoint_path = '.' 
-    yc_companies_file = os.path.join(nextjs_data_path, 'spring25_cleaned.json')
-    linkedin_file = os.path.join(nextjs_data_path, 'linkedin-data.json')
-    db_file_output = os.path.join(vanna_endpoint_path, 'yc_companies.db')
+
+    # Determine the directory where this script is located.
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # --- INPUT PATHS (reads from the same folder as this script) ---
+    yc_companies_file = os.path.join(script_dir, 'spring25_cleaned.json')
+    linkedin_file = os.path.join(script_dir, 'linkedin-data.json')
+
+    # --- OUTPUT PATH (writes to the persistent disk via DATA_DIR on Render) ---
+    # It defaults to the current directory ('.') if the DATA_DIR variable is not set,
+    # which is perfect for local development.
+    data_output_dir = os.environ.get('DATA_DIR', '.')
+    db_file_output = os.path.join(data_output_dir, 'yc_companies.db')
+    
+    print(f"Attempting to read source JSON files from: {script_dir}")
+    print(f"Attempting to write database to: {db_file_output}")
+
+    # Final check to make sure the input files exist before running.
     if not os.path.exists(yc_companies_file) or not os.path.exists(linkedin_file):
-        print("ERROR: Could not find one or both of the required JSON files.")
+        print("\nERROR: Could not find 'spring25_cleaned.json' or 'linkedin-data.json'.")
+        print("Please ensure they are in the same directory as this script.")
     else:
         create_and_populate_db(
             db_path=db_file_output,
-            yc_companies_json=yc_companies_file,
-            linkedin_json=linkedin_file
+            yc_companies_json_path=yc_companies_file,
+            linkedin_json_path=linkedin_file
         )
