@@ -1,7 +1,8 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Dict, Any, Optional
+import pandas as pd
 from dotenv import load_dotenv
 
 from vanna.openai import OpenAI_Chat
@@ -10,15 +11,28 @@ from vanna.chromadb import ChromaDB_VectorStore
 load_dotenv()
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY not found in environment variables.")
+    raise ValueError("OPENAI_API_KEY not found in environment variables. Please add it to your .env file.")
+
+# --- DEPLOYMENT-READY PATH CONFIGURATION ---
+DATA_DIR = os.environ.get('DATA_DIR', '.')
+CHROMA_PATH = os.path.join(DATA_DIR, 'chroma') 
+DB_PATH = os.path.join(DATA_DIR, 'yc_companies.db')
+
+print(f"Using data directory: {DATA_DIR}")
+print(f"ChromaDB path: {CHROMA_PATH}")
+print(f"SQLite DB path: {DB_PATH}")
+# --- END DEPLOYMENT CONFIGURATION ---
 
 class MyVanna(ChromaDB_VectorStore, OpenAI_Chat):
     def __init__(self, config=None):
-        ChromaDB_VectorStore.__init__(self, config={'path': '.'})
+        # Pass the CHROMA_PATH to the vector store initializer
+        ChromaDB_VectorStore.__init__(self, config={'path': CHROMA_PATH})
         OpenAI_Chat.__init__(self, config=config)
 
 vn = MyVanna(config={'api_key': OPENAI_API_KEY, 'model': 'gpt-4o'})
-vn.connect_to_sqlite('yc_companies.db')
+
+# Connect to our SQLite database using the configured path
+vn.connect_to_sqlite(DB_PATH)
 
 app = FastAPI(title="YC Companies Query API")
 
