@@ -65,14 +65,82 @@ class QueryResponse(BaseModel):
     company_ids: List[int]
     error: Optional[str] = None
 
+# ---- helpers (place above FastAPI routes) ----
+def force_company_id_question(user_q: str) -> str:
+    # Strong instruction the model can't miss
+    return (
+        "Return ONLY a SQL query that outputs a single column named id with DISTINCT company IDs. "
+        "Do not return founder IDs, names, or any other columns. "
+        f"Question: {user_q}"
+    )
+
+def extract_company_ids(sql: str, df: pd.DataFrame) -> list[int]:
+    """Return company IDs from the model result; map founder IDs to companies if needed."""
+    if df is None or df.empty:
+        return []
+
+    # Prefer direct company id columns
+    for col in ("id", "company_id"):
+        if col in df.columns:
+            return (
+                pd.to_numeric(df[col], errors="coerce")
+                .dropna()
+                .astype(int)
+                .unique()
+                .tolist()
+            )
+
+    # If we got founder IDs, map them to company IDs
+    founder_col = next((c for c in ("profileId", "founder_id") if c in df.columns), None)
+    if founder_col:
+        founder_ids = (
+            pd.to_numeric(df[founder_col], errors="coerce")
+            .dropna()
+            .astype(int)
+            .unique()
+            .tolist()
+        )
+        if founder_ids:
+            inlist = ",".join(map(str, founder_ids))
+            mapped = vn.run_sql(
+                f"""
+                SELECT DISTINCT c.id
+                FROM companies c
+                JOIN company_founders cf ON c.id = cf.company_id
+                WHERE cf.founder_id IN ({inlist})
+                """
+            )
+            if mapped is not None and "id" in mapped.columns:
+                return mapped["id"].astype(int).unique().tolist()
+
+    # Last resort: wrap the model's SQL as a subquery if it obviously targets founders
+    if (" founders " in sql.lower()) or (" founder_" in sql.lower()) or ("profileid" in sql.lower()):
+        wrapped = vn.run_sql(
+            f"""
+            SELECT DISTINCT c.id
+            FROM companies c
+            JOIN company_founders cf ON c.id = cf.company_id
+            WHERE cf.founder_id IN ({sql.rstrip(';')})
+            """
+        )
+        if wrapped is not None and "id" in wrapped.columns:
+            return wrapped["id"].astype(int).unique().tolist()
+
+    return []
+
+
 @app.post("/query")
 async def query(request: QueryRequest):
     try:
-        sql, df, _ = vn.ask(request.question, visualize=False)
-        company_ids = []
-        if df is not None and not df.empty:
-            id_col = next((col for col in ['id', 'company_id'] if col in df.columns), 'id')
-            company_ids = df[id_col].unique().tolist() # Use unique() to prevent duplicates
+        # 1) steer the model
+        q = force_company_id_question(request.question)
+
+        # 2) ask Vanna
+        sql, df, _ = vn.ask(q, visualize=False)
+
+        # 3) robust extraction
+        company_ids = extract_company_ids(sql, df)
+
         return {"sql": sql, "company_ids": company_ids, "error": None}
     except Exception as e:
         print(f"Error during query: {e}")
@@ -118,7 +186,9 @@ async def train_model():
         # Founder attribute queries (education) - CORRECTED JOIN
         {"question": "MIT", "sql": "SELECT DISTINCT c.id FROM companies AS c JOIN company_founders AS cf ON c.id = cf.company_id JOIN founder_education AS fe ON cf.founder_id = fe.founder_id WHERE fe.school LIKE '%Massachusetts Institute of Technology%';"},
         {"question": "Berkeley founders", "sql": "SELECT DISTINCT c.id FROM companies AS c JOIN company_founders AS cf ON c.id = cf.company_id JOIN founder_education AS fe ON cf.founder_id = fe.founder_id WHERE fe.school LIKE '%Berkeley%';"},
-        
+        {"question": "founders from MIT", "sql": "SELECT DISTINCT c.id FROM companies c JOIN company_founders cf ON c.id = cf.company_id JOIN founder_education fe ON cf.founder_id = fe.founder_id WHERE fe.school LIKE '%Massachusetts Institute of Technology%';"},
+        {"question": "founders from mit", "sql": "SELECT DISTINCT c.id FROM companies c JOIN company_founders cf ON c.id = cf.company_id JOIN founder_education fe ON cf.founder_id = fe.founder_id WHERE fe.school LIKE '%Massachusetts Institute of Technology%';"},
+
         # Founder attribute queries (experience) - CORRECTED JOIN
         {"question": "ex-Google founders", "sql": "SELECT DISTINCT c.id FROM companies AS c JOIN company_founders AS cf ON c.id = cf.company_id JOIN founder_experience AS fe ON cf.founder_id = fe.founder_id WHERE fe.company_name = 'Google';"},
         {"question": "founders who worked at FAANG", "sql": "SELECT DISTINCT c.id FROM companies AS c JOIN company_founders AS cf ON c.id = cf.company_id JOIN founder_experience AS fe ON cf.founder_id = fe.founder_id WHERE fe.company_name IN ('Meta', 'Apple', 'Amazon', 'Netflix', 'Google');"},
